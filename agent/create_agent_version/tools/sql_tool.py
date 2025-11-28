@@ -1,42 +1,60 @@
 import os
+import json
 from langchain_community.utilities.sql_database import SQLDatabase
 from langchain_core.tools import tool
 
-# DB接続設定 (環境変数から読み込むのがベストですが、今回は直接記述または.env経由)
+# DB接続
 DB_URI = os.getenv("DB_URI", "postgresql+psycopg2://user:password@localhost:5432/ec_db")
-
 db = SQLDatabase.from_uri(DB_URI)
 
 @tool
-def list_tables_tool():
-    """データベースにあるテーブルの一覧を取得します。"""
+def list_tables_tool() -> str:
+    """データベースに存在するテーブル一覧を返します。"""
     try:
         tables = db.get_usable_table_names()
-        return f"テーブル一覧: {tables}"
+        return json.dumps({"tables": list(tables)}, ensure_ascii=False)
     except Exception as e:
-        return f"エラー: テーブル一覧の取得に失敗しました。{e}"
+        return f"エラー: テーブル一覧の取得に失敗しました: {e}"
 
 @tool
-def get_schema_tool(table_names: str):
+def get_schema_tool(table_names: str) -> str:
     """
-    指定されたテーブルのスキーマ（カラム名や型）を取得します。
-    引数はカンマ区切りの文字列で指定してください。例: "users, orders"
+    指定されたテーブルのスキーマ情報（カラム名・型など）を返します。
+    複数指定する場合はカンマ区切りで入力してください。
+    例: "users, orders"
+
+    無効なテーブル名がある場合はエラーを返します。
     """
     if not table_names:
         return "エラー: テーブル名を指定してください。"
+
+    names = [name.strip() for name in table_names.split(",")]
+
     try:
-        return db.get_table_info(table_names.split(", "))
+        schema = db.get_table_info(names)
+        return schema
     except Exception as e:
-        return f"エラー: スキーマ情報の取得に失敗しました。{e}"
+        return f"スキーマ情報の取得に失敗しました: {e}"
 
 @tool
-def execute_sql_tool(sql_query: str):
+def execute_sql_tool(sql_query: str) -> str:
     """
-    SQLクエリを実行し、結果を返します。
-    更新系（INSERT, UPDATE, DELETE）は禁止です。SELECTのみ使用してください。
+    SQLクエリ（SELECT文のみ）を実行し、結果を返します。
+    更新系（INSERT, UPDATE, DELETE, DROP 等）は禁止です。
+
+    実行前にクエリが SELECT で始まるか検証します。
+    結果は JSON 形式で返します。
     """
-    print(f"🔄 Executing SQL: {sql_query}")
+    sql = sql_query.strip().lower()
+
+    # 安全対策：SELECT 以外を禁止
+    if not sql.startswith("select"):
+        return "エラー: SELECT 文のみ実行可能です。更新系クエリは禁止されています。"
+
+    print(f"[SQL Execute] {sql_query}")
+
     try:
-        return db.run(sql_query)
+        result = db.run(sql_query)
+        return json.dumps({"rows": result}, ensure_ascii=False)
     except Exception as e:
-        return f"SQL実行エラー: {e}\nクエリを見直して再試行してください。"
+        return f"SQL実行エラー: {e}"
